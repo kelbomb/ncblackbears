@@ -53,18 +53,20 @@ load(file = "Luna_pace.RData")
 
 ```{r}
 
-##remove october data
+##remove october data (due to access error)
 luna_pace <- luna_pace[!(luna_pace$Month == "10"),]
 
-##check distribution of hours (needs grouping)
+##check distribution of hours
 xtabs(~Pace + Hour, data = luna_pace)
+
+#group hours into 3 level factor
 luna_pace$Hour_group <- ifelse(luna_pace$Hour %in% c(9, 10, 11), "Morning",
                                ifelse(luna_pace$Hour %in% c(12, 13), "Mid-day",
                                       ifelse(luna_pace$Hour %in% c(14, 15, 16), "Afternoon", "")))
 
 xtabs(~Pace + Hour_group, data = luna_pace)
 
-##as factor
+##set as factor
 luna_pace$Hour_group <- as.factor(luna_pace$Hour_group)
 
 ##now access (fine)
@@ -76,7 +78,7 @@ head(luna_pace)
 #check structure
 str(luna_pace)
 
-#USE A BOXPLOT/TABLE/FIND DESCRIPTIVE STATS to EXPLORE FACTORS (YOU DID SOMETHING SIMILAR BELOW BUT THE NUMBERS HERE ARE HELPFUL TO ME)
+#USE A BOXPLOT/TABLE/FIND DESCRIPTIVE STATS to EXPLORE FACTORS
 apply(table(luna_pace[, c("Pace", "Access")]), 1, prop.table)
 apply(table(luna_pace[, c("Pace", "Season")]), 1, prop.table)
 apply(table(luna_pace[, c("Pace", "Hour_group")]), 1, prop.table)
@@ -92,7 +94,7 @@ ggplot(luna_pace, aes(x = Hour_group, y = Pace)) +
   stat_summary(fun.data = mean_cl_boot,size = 0.5)+
   ylim(c(0,1))
 
-#PACE SHOULD BE A FACTOR NOW! No numerical meaning to the 0,1
+#PACE SHOULD BE A FACTOR NOW!
 luna_pace$Pace <- factor(luna_pace$Pace)
 
 ```
@@ -103,13 +105,13 @@ luna_pace$Pace <- factor(luna_pace$Pace)
 
 ```{r}
 
-#MAKE YOUR MODELS WHICH REFLECT PREDICTIONS
+#MAKE MODELS WHICH REFLECT PREDICTIONS
 
 modlist<-list()
 
 modlist[["full"]] <- full <- glm(Pace ~ Access + Season + Hour_group, data = luna_pace, family = "binomial")
 
-modlist[["null"]]<-null <- glm(Pace ~ 1, data = luna_pace, family = "binomial")
+modlist[["null"]]<- null <- glm(Pace ~ 1, data = luna_pace, family = "binomial")
 
 modlist[["access.season"]] <- as <- glm(Pace ~ Access + Season, data = luna_pace, family = "binomial")
 
@@ -127,7 +129,7 @@ modlist[["hour.season"]] <- hs <- glm(Pace ~ Hour_group + Season, data = luna_pa
 
 aictab(modlist)
 
-#THE FULL MODEL IS THE BEST! LET'S EXPLORE MAKING SEASON A RANDOM EFFECT  BECAUSE WE SUSPECTED IT WOULD NEED TO BE CONTROLLED FOR
+#THE FULL MODEL IS THE BEST! LET'S EXPLORE MAKING SEASON A RANDOM EFFECT BECAUSE WE SUSPECT IT SHOULD BE CONTROLLED FOR
 
 modlist1 <- list()
 
@@ -151,14 +153,12 @@ aictab(modlist1)
 
 ```{r}
 
+#check model summary
 summary(full)
 tab_model(full)
-##Marginal R^2 - 0.218 and Conditional R^2 - 0.298
 
-##unique probabilities
-probs_luna_pace <- unique(fitted(full))
-probs_luna_pace
 
+#unique probabilities
 probl_pace <- unique(predict(full, type="response"))
 
 ##best model is full model with season as random variable
@@ -174,9 +174,9 @@ probl_pace <- unique(predict(full, type="response"))
 co_lunapace <- fixef(full)
 co_lunapace
 
-###over fitting
+###check over fitting
 isSingular(full)
-#False, no overfitting
+#False
 
 ```
 
@@ -185,15 +185,6 @@ isSingular(full)
 ###################
 
 ```{r}
-
-##model with response = pace, predictors = access and hour groups and season as random variable
-plot_model(full, type = "pred", terms = c("Hour_group"))
-plot_model(full, type = "pred", terms = c("Access"))
-
-##basic effects plot
-require(effects)
-plot (allEffects(full))
-
 
 ###prepare plot
 newdata <- expand.grid(Access = c("No","Yes"),
@@ -220,27 +211,8 @@ p + theme(legend.background = element_rect(size=0.5, linetype="solid",
 dev.off()
 
 
-##points
-jpeg(file="luna_pace_point.jpeg")
-p1 <- ggplot(pdatfull, aes(x = labs, y = mn, color = Access,)) + 
-  geom_line(size = 3) +                 
-  geom_point(data = pdatfull, aes(x = labs, y = mn, color = Access, group = NULL, size = 2),
-           size = 1, position = position_dodge(width = 0.8)) + 
-  geom_errorbar(data = pdatfull, aes(x = labs, y = mn, ymax = mn + se, 
-                                    ymin = mn - se, group = NULL), width = 0.2, position = position_dodge(width = 0.8)) +
-  scale_color_manual(name = NULL, labels = c("Limited Access", "Full Access"), 
-                    values = c("lightsteelblue", "firebrick")) +
-  labs(y = "Predicted likelihood of pacing", x = "Access Type") +
-  theme_bw(base_size = 30) +
-  theme(text = element_text(size=15))
-p1 + theme(legend.background = element_rect(size=0.5, linetype="solid", 
-                                           color ="black"))+ theme(legend.position = c(0.2, .9))
-
-
-
 pdatfull
 p
-p1
 
 ```
 
@@ -253,14 +225,6 @@ Season = c("Non-Denning", "Denning"))
 fit <- data.frame(x = predict(a, newdata = newdata, se.fit = F, type = "response"))
 access <- data.frame(newdata, Pace = fit$x)
 access1 <- access %>% group_by(Access) %>% summarise(mn = mean(Pace, na.rm = T), se = sd(Pace, na.rm = T)/sqrt(n()))
-#No
-#0.3303017
-#SD 0.13611412
-
-#Yes
-#0.1112120
-#SD 0.05803405
-
 
 #hour probs
 newdata <- expand.grid(Hour_group = c("Morning","Mid-day", "Afternoon"),
@@ -268,9 +232,6 @@ Season = c("Non-Denning", "Denning"))
 fit <- data.frame(x = predict(h, newdata = newdata, se.fit = F, type = "response"))
 hour <- data.frame(newdata, Pace = fit$x)
 hour1 <- hour %>% group_by(Hour_group) %>% summarise(mn = mean(Pace, na.rm = T), se = sd(Pace, na.rm = T)/sqrt(n()))
-#Morning 0.05377721
-#Mid-day 0.15783898
-#afternoon 0.24000000
 
 ```
 
@@ -320,7 +281,7 @@ nova_pace <- nova_pace[!(nova_pace$Month == "10"),]
 ##check distribution of hours (needs grouping)
 xtabs(~Pace + Hour, data = nova_pace)
 
-
+#group
 nova_pace$Hour_group <- ifelse(nova_pace$Hour %in% c(9, 10, 11), "Morning",
                                ifelse(nova_pace$Hour %in% c(12, 13), "Mid-day",
                                       ifelse(nova_pace$Hour %in% c(14, 15, 16), "Afternoon", "")))
@@ -368,7 +329,6 @@ nova_pace$Pace <- factor(nova_pace$Pace)
 
 modlist <- list()
 
-
 modlist[["null"]] <- null <- glmer(Pace ~ 1 + (1|Season), data = nova_pace, family = "binomial")
 
 modlist[["full"]] <- full <- glmer(Pace ~ Hour_group + Access + (1|Season), data = nova_pace, family = "binomial")
@@ -394,9 +354,7 @@ aictab(modlist)
 summary(full)
 
 tab_model(full)
-##Marginal R^2 - 0.121 and Conditional R^2 - 0.806
-##nova appears to be more impacted by seasonality than luna or we are missing
-#some important variable for luna
+
 
 ```
 
@@ -421,14 +379,6 @@ isSingular(full)
 ###################
 
 ```{r}
-
-##model with response = pace, predictors = access and hour groups and season as random variable
-plot_model(full, type = "pred", terms = c("Access", "Hour_group"))
-
-##basic effects plot
-require(effects)
-plot (allEffects(full))
-
 
 ###prepare plot
 newdata <- expand.grid(Access = c("No","Yes"),
@@ -461,32 +411,13 @@ p
 
 
 ```{r}
-#access
-#No
-#0.07099455
-#SD 0.07005064
-
-Yes
-#0.02011071
-#SD 0.01987114
-
 #hour
 newdata <- expand.grid(Hour_group = c("Morning","Mid-day", "Afternoon"),
 Season = c("Non-Denning", "Denning"))
 fit <- data.frame(x = predict(h, newdata = newdata, se.fit = F, type = "response"))
 hour <- data.frame(newdata, Pace = fit$x)
 hour1 <- hour %>% group_by(Hour_group) %>% summarise(mn = mean(Pace, na.rm = T), se = sd(Pace, na.rm = T)/sqrt(n()))
-#Morning
-#0.007985841
-#SD 0.007963842
 
-#Mid-day
-#0.036026905
-#SD 0.035921691
-
-#Afternoon
-#0.120256203
-#SD 0.119827576
 ```
 
 #######################
@@ -534,6 +465,8 @@ luna_forage <- luna_forage[!(luna_forage$Month == "10"),]
 
 #check distribution of hours (needs grouping)
 xtabs(~Foraging + Hour, data = luna_forage)
+
+#group
 luna_forage$Hour_group <- ifelse(luna_forage$Hour %in% c(9, 10, 11), "Morning",
                                  ifelse(luna_forage$Hour %in% c(12, 13), "Mid-day",
                                         ifelse(luna_forage$Hour %in% c(14, 15, 16), "Afternoon", "")))
@@ -602,7 +535,6 @@ aictab(modlist)
 ##summarize model, access best model
 summary(a)
 tab_model(a)
-##Marginal R^2 - 0.014 and Conditional R^2 - 0.074
 
 ```
 
@@ -627,13 +559,6 @@ isSingular(a)
 ###################
 
 ```{r}
-
-##model with response = pace, predictors = access and hour groups and season as random variable
-plot_model(a, type = "pred", terms = c("Access"))
-
-##basic effects plot
-require(effects)
-plot (allEffects(a))
 
 ###prepare plot
 pred_data <- expand.grid(Access = c("No","Yes"),
@@ -711,7 +636,7 @@ nova_forage <- nova_forage[!(nova_forage$Month == "10"),]
 ##check distribution of hours (needs grouping)
 xtabs(~Foraging + Hour, data = nova_forage)
 
-
+#group
 nova_forage$Hour_group <- ifelse(nova_forage$Hour %in% c(9, 10, 11), "Morning",
                                  ifelse(nova_forage$Hour %in% c(12, 13), "Mid-day",
                                         ifelse(nova_forage$Hour %in% c(14, 15, 16), "Afternoon", "")))
@@ -779,7 +704,6 @@ aictab(modlist)
 ##interaction model best
 summary(full)
 tab_model(full)
-##Marginal R^2 - 0.016 and Conditional R^2 - 0.099
 
 ```
 
@@ -804,12 +728,6 @@ isSingular(full)
 ###################
 
 ```{r}
-
-plot_model(full, type = "pred", terms = c("Access", "Hour_group"))
-
-##basic effects plot
-require(effects)
-plot (allEffects(full))
 
 ###prepare plot
 newdata <- expand.grid(Access = c("No","Yes"),
@@ -841,33 +759,12 @@ p
 ```
 
 ```{r}
-#access
-#No
-#0.1046419
-#SD 0.04683933
-
-#Yes
-#0.1337054
-#SD 0.05823779
-
 #hour
 newdata <- expand.grid(Hour_group = c("Morning","Mid-day", "Afternoon"),
 Season = c("Non-Denning", "Denning"))
 fit <- data.frame(x = predict(h, newdata = newdata, se.fit = F, type = "response"))
 hour <- data.frame(newdata, Foraging = fit$x)
 hour1 <- hour %>% group_by(Hour_group) %>% summarise(mn = mean(Foraging, na.rm = T), se = sd(Foraging, na.rm = T)/sqrt(n()))
-
-#Morning
-#0.09721349
-#SD 0.03758125
-
-#Mid-day
-#0.12697528
-#SD 0.04767453
-
-#Afternoon
-#0.14787407
-#SD 0.05434816
 
 ```
 
