@@ -1,0 +1,873 @@
+---
+title: "Black Bear Code (noint)"
+author: "Kelly Bruno"
+date: '2022-09-24'
+output:
+  pdf_document: 
+    latex_engine: lualatex
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+
+##set working directory
+setwd("~/Black Bears")
+
+# Clear Environment and Load Packages -------------------------------------
+
+rm(list = ls())
+library(AER)
+library(arm)
+library(Sleuth3)
+library(lmerTest)
+library(tidyverse)
+library(GGally) #check assumptions
+library(ggplot2) #graphing
+library(AICcmodavg) #AIC tables
+library(usdm) #for VIF calculations on dataframe
+library(lme4) #for assumption tests in mixed effects model
+library(gridExtra) #grid for plots
+library(sjPlot) #visualizing mixed-effects models
+library(sjstats) #ICC - intraclass-correlation coefficent
+require(jtools) ##plots and saving plots
+library(viridis) #color scheme
+theme_set(theme_classic(12))
+
+##load data
+load(file = "Luna_pace.RData")
+
+```
+
+#######################
+#######################
+## Luna Pace Model   ##
+#######################
+#######################
+
+#Data exploration
+
+```{r}
+
+##remove october data
+luna_pace <- luna_pace[!(luna_pace$Month == "10"),]
+
+##check distribution of hours (needs grouping)
+xtabs(~Pace + Hour, data = luna_pace)
+luna_pace$Hour_group <- ifelse(luna_pace$Hour %in% c(9, 10, 11), "Morning",
+                               ifelse(luna_pace$Hour %in% c(12, 13), "Mid-day",
+                                      ifelse(luna_pace$Hour %in% c(14, 15, 16), "Afternoon", "")))
+
+xtabs(~Pace + Hour_group, data = luna_pace)
+
+##as factor
+luna_pace$Hour_group <- as.factor(luna_pace$Hour_group)
+
+##now access (fine)
+xtabs(~Pace + Access, data = luna_pace)
+
+##explore the data
+head(luna_pace)
+
+#check structure
+str(luna_pace)
+
+#USE A BOXPLOT/TABLE/FIND DESCRIPTIVE STATS to EXPLORE FACTORS (YOU DID SOMETHING SIMILAR BELOW BUT THE NUMBERS HERE ARE HELPFUL TO ME)
+apply(table(luna_pace[, c("Pace", "Access")]), 1, prop.table)
+apply(table(luna_pace[, c("Pace", "Season")]), 1, prop.table)
+apply(table(luna_pace[, c("Pace", "Hour_group")]), 1, prop.table)
+
+##plot of data
+##access seems to negatively effect pacing
+ggplot(luna_pace, aes(x = Access, y = Pace)) +
+  stat_summary(fun.data = mean_cl_boot,size = 0.5)+
+  ylim(c(0,1))
+
+##time of day seems to effect pacing
+ggplot(luna_pace, aes(x = Hour_group, y = Pace)) +
+  stat_summary(fun.data = mean_cl_boot,size = 0.5)+
+  ylim(c(0,1))
+
+#PACE SHOULD BE A FACTOR NOW! No numerical meaning to the 0,1
+luna_pace$Pace <- factor(luna_pace$Pace)
+
+```
+
+##################
+##Start modeling##
+##################
+
+```{r}
+
+#MAKE YOUR MODELS WHICH REFLECT PREDICTIONS
+
+modlist<-list()
+
+modlist[["full"]] <- full <- glm(Pace ~ Access + Season + Hour_group, data = luna_pace, family = "binomial")
+
+modlist[["null"]]<-null <- glm(Pace ~ 1, data = luna_pace, family = "binomial")
+
+modlist[["access.season"]] <- as <- glm(Pace ~ Access + Season, data = luna_pace, family = "binomial")
+
+modlist[["access.hour"]] <- ah <- glm(Pace ~ Access + Hour_group, data = luna_pace, family = "binomial")
+
+modlist[["access"]]<- a <- glm(Pace ~ Access, data = luna_pace, family = "binomial")
+
+modlist[["hour"]]<-h <- glm(Pace ~ Hour_group, data = luna_pace, family = "binomial")
+
+modlist[["season"]]<- s <- glm(Pace ~ Season, data = luna_pace, family = "binomial")
+
+modlist[["hour.season"]] <- hs <- glm(Pace ~ Hour_group + Season, data = luna_pace, family = "binomial")
+
+#COMPARE YOUR AICS#
+
+aictab(modlist)
+
+#THE FULL MODEL IS THE BEST! LET'S EXPLORE MAKING SEASON A RANDOM EFFECT  BECAUSE WE SUSPECTED IT WOULD NEED TO BE CONTROLLED FOR
+
+modlist1 <- list()
+
+
+modlist1[["null"]] <- null <- glmer(Pace ~ 1 + (1|Season), data = luna_pace, family = "binomial")
+
+modlist1[["full"]] <- full <- glmer(Pace ~ Access + Hour_group + (1|Season), data = luna_pace, family = "binomial")
+
+modlist1[["access"]] <- a <- glmer(Pace ~ Access + (1|Season), data = luna_pace, family = "binomial")
+
+modlist1[["hour"]] <- h <- glmer(Pace ~ Hour_group + (1|Season), data = luna_pace, family = "binomial")
+
+aictab(modlist1)
+#full model is best
+
+```
+
+###############
+##Final Model##
+###############
+
+```{r}
+
+summary(full)
+tab_model(full)
+##Marginal R^2 - 0.218 and Conditional R^2 - 0.298
+
+##unique probabilities
+probs_luna_pace <- unique(fitted(full))
+probs_luna_pace
+
+probl_pace <- unique(predict(full, type="response"))
+
+##best model is full model with season as random variable
+
+```
+
+####################
+##Test Assumptions##
+####################
+
+```{r}
+#pull coefficients
+co_lunapace <- fixef(full)
+co_lunapace
+
+###over fitting
+isSingular(full)
+#False, no overfitting
+
+```
+
+###################
+##Plot the Model ##
+###################
+
+```{r}
+
+##model with response = pace, predictors = access and hour groups and season as random variable
+plot_model(full, type = "pred", terms = c("Hour_group"))
+plot_model(full, type = "pred", terms = c("Access"))
+
+##basic effects plot
+require(effects)
+plot (allEffects(full))
+
+
+###prepare plot
+newdata <- expand.grid(Access = c("No","Yes"),
+Season = c("Non-Denning", "Denning"))
+fit <- data.frame(x = predict(a, newdata = newdata, se.fit = F, type = "response"))
+access <- data.frame(newdata, Pace = fit$x)
+access1 <- access %>% group_by(Access) %>% summarise(mn = mean(Pace, na.rm = T), se = sd(Pace, na.rm = T)/sqrt(n()))
+
+#plot
+pdatfull <- mutate(access1, labs = c("Limited Access", "Full Access"))
+
+jpeg(file="luna_pace_fin.jpeg")
+p <- ggplot(pdatfull, aes(x = labs, y = mn)) + 
+  geom_line(size = 2) +                 
+  geom_col(data = pdatfull, aes(x = labs, y = mn, group = NULL),
+           size = 1, position = position_dodge(width = 0.8), fill = c("lightsteelblue", "firebrick")) + 
+  geom_errorbar(data = pdatfull, aes(x = labs, y = mn, ymax = mn + se, 
+                                    ymin = mn - se, group = NULL), width = 0.2, position = position_dodge(width = 0.8)) +
+  labs(y = "Predicted likelihood of pacing", x = "Access Type") +
+  theme_bw(base_size = 30) +
+  theme(text = element_text(size=15))
+p + theme(legend.background = element_rect(size=0.5, linetype="solid", 
+                                           colour ="black"))+ theme(legend.position = c(0.2, .9))
+dev.off()
+
+
+##points
+jpeg(file="luna_pace_point.jpeg")
+p1 <- ggplot(pdatfull, aes(x = labs, y = mn, color = Access,)) + 
+  geom_line(size = 3) +                 
+  geom_point(data = pdatfull, aes(x = labs, y = mn, color = Access, group = NULL, size = 2),
+           size = 1, position = position_dodge(width = 0.8)) + 
+  geom_errorbar(data = pdatfull, aes(x = labs, y = mn, ymax = mn + se, 
+                                    ymin = mn - se, group = NULL), width = 0.2, position = position_dodge(width = 0.8)) +
+  scale_color_manual(name = NULL, labels = c("Limited Access", "Full Access"), 
+                    values = c("lightsteelblue", "firebrick")) +
+  labs(y = "Predicted likelihood of pacing", x = "Access Type") +
+  theme_bw(base_size = 30) +
+  theme(text = element_text(size=15))
+p1 + theme(legend.background = element_rect(size=0.5, linetype="solid", 
+                                           color ="black"))+ theme(legend.position = c(0.2, .9))
+
+
+
+pdatfull
+p
+p1
+
+```
+
+
+```{r}
+
+#access probs
+newdata <- expand.grid(Access = c("No","Yes"),
+Season = c("Non-Denning", "Denning"))
+fit <- data.frame(x = predict(a, newdata = newdata, se.fit = F, type = "response"))
+access <- data.frame(newdata, Pace = fit$x)
+access1 <- access %>% group_by(Access) %>% summarise(mn = mean(Pace, na.rm = T), se = sd(Pace, na.rm = T)/sqrt(n()))
+#No
+#0.3303017
+#SD 0.13611412
+
+#Yes
+#0.1112120
+#SD 0.05803405
+
+
+#hour probs
+newdata <- expand.grid(Hour_group = c("Morning","Mid-day", "Afternoon"),
+Season = c("Non-Denning", "Denning"))
+fit <- data.frame(x = predict(h, newdata = newdata, se.fit = F, type = "response"))
+hour <- data.frame(newdata, Pace = fit$x)
+hour1 <- hour %>% group_by(Hour_group) %>% summarise(mn = mean(Pace, na.rm = T), se = sd(Pace, na.rm = T)/sqrt(n()))
+#Morning 0.05377721
+#Mid-day 0.15783898
+#afternoon 0.24000000
+
+```
+
+#######################
+#######################
+## Nova Pace Model   ##
+#######################
+#######################
+
+```{r}
+##set working directory
+setwd("~/Black Bears")
+
+#remove previous data
+##run libraries again
+rm(list = ls())
+library(AER)
+library(arm)
+library(Sleuth3)
+library(lmerTest)
+library(tidyverse)
+library(GGally) #check assumptions
+library(ggplot2) #graphing
+library(AICcmodavg) #AIC tables
+library(usdm) #for VIF calculations on dataframe
+library(lme4) #for assumption tests in mixed effects model
+library(gridExtra) #grid for plots
+library(sjPlot) #visualizing mixed-effects models
+library(sjstats) #ICC - intraclass-correlation coefficent
+require(jtools) ##plots and saving plots
+library(viridis) #color scheme
+theme_set(theme_classic(12))
+
+##load data
+load(file = "Nova_pace.RData")
+
+
+```
+
+#Date Exploration
+
+```{r}
+
+##remove october data
+nova_pace <- nova_pace[!(nova_pace$Month == "10"),]
+
+##check distribution of hours (needs grouping)
+xtabs(~Pace + Hour, data = nova_pace)
+
+
+nova_pace$Hour_group <- ifelse(nova_pace$Hour %in% c(9, 10, 11), "Morning",
+                               ifelse(nova_pace$Hour %in% c(12, 13), "Mid-day",
+                                      ifelse(nova_pace$Hour %in% c(14, 15, 16), "Afternoon", "")))
+xtabs(~Pace + Hour_group, data = nova_pace)
+
+##as factor
+nova_pace$Hour_group <- as.factor(nova_pace$Hour_group)
+
+##now access (fine)
+xtabs(~Pace + Access, data = nova_pace)
+
+##explore the data
+head(nova_pace)
+str(nova_pace)
+
+#USE A BOXPLOT/TABLE/FIND DESCRIPTIVE STATS to EXPLORE FACTORS
+apply(table(nova_pace[, c("Pace", "Access")]), 1, prop.table)
+apply(table(nova_pace[, c("Pace", "Season")]), 1, prop.table)
+apply(table(nova_pace[, c("Pace", "Hour_group")]), 1, prop.table)
+
+##plot of data
+##access seems to have small effect on foraging
+ggplot(nova_pace, aes(x = Access, y = Pace)) +
+  stat_summary(fun.data = mean_cl_boot,size = 0.5)+
+  ylim(c(0,1))
+
+##no clear relationship between hour of day and foraging
+ggplot(nova_pace, aes(x = Hour_group, y = Pace)) +
+  stat_summary(fun.data = mean_cl_boot,size = 0.5)+
+  ylim(c(0,1))
+
+
+#PACE SHOULD BE A FACTOR NOW
+nova_pace$Pace <- factor(nova_pace$Pace)
+
+```
+
+##################
+##Start modeling##
+##################
+
+```{r}
+
+#Models
+
+modlist <- list()
+
+
+modlist[["null"]] <- null <- glmer(Pace ~ 1 + (1|Season), data = nova_pace, family = "binomial")
+
+modlist[["full"]] <- full <- glmer(Pace ~ Hour_group + Access + (1|Season), data = nova_pace, family = "binomial")
+
+modlist[["access"]] <- a <- glmer(Pace ~ Access + (1|Season), data = nova_pace, family = "binomial")
+
+modlist[["hour"]] <- h <- glmer(Pace ~ Hour_group + (1|Season), data = nova_pace, family = "binomial")
+
+#compare AICs
+aictab(modlist)
+
+#full model is best
+
+```
+
+###############
+##Final Model##
+###############
+
+```{r}
+
+##full model best
+summary(full)
+
+tab_model(full)
+##Marginal R^2 - 0.121 and Conditional R^2 - 0.806
+##nova appears to be more impacted by seasonality than luna or we are missing
+#some important variable for luna
+
+```
+
+####################
+##Test Assumptions##
+####################
+
+```{r}
+
+#pull coefficients
+co_novapace <- fixef(full)
+co_novapace
+
+###over fitting
+isSingular(full)
+#False, no overfitting
+
+```
+
+###################
+##Plot the Model ##
+###################
+
+```{r}
+
+##model with response = pace, predictors = access and hour groups and season as random variable
+plot_model(full, type = "pred", terms = c("Access", "Hour_group"))
+
+##basic effects plot
+require(effects)
+plot (allEffects(full))
+
+
+###prepare plot
+newdata <- expand.grid(Access = c("No","Yes"),
+Season = c("Non-Denning", "Denning"))
+fit <- data.frame(x = predict(a, newdata = newdata, se.fit = F, type = "response"))
+access <- data.frame(newdata, Pace = fit$x)
+access1 <- access %>% group_by(Access) %>% summarise(mn = mean(Pace, na.rm = T), se = sd(Pace, na.rm = T)/sqrt(n()))
+
+#plot
+pdatfull <- mutate(access1, labs = c("Limited Access", "Full Access"))
+
+jpeg(file="nova_pace_fin.jpeg")
+p <- ggplot(pdatfull, aes(x = labs, y = mn)) + 
+  geom_line(size = 2) +                 
+  geom_col(data = pdatfull, aes(x = labs, y = mn, group = NULL),
+           size = 1, position = position_dodge(width = 0.8), fill = c("lightsteelblue", "firebrick")) + 
+  geom_errorbar(data = pdatfull, aes(x = labs, y = mn, ymax = mn + se, 
+                                    ymin = mn - se, group = NULL), width = 0.2, position = position_dodge(width = 0.8)) +
+  labs(y = "Predicted likelihood of pacing", x = "Access Type") +
+  theme_bw(base_size = 30) +
+  theme(text = element_text(size=15))
+p + theme(legend.background = element_rect(size=0.5, linetype="solid", 
+                                           colour ="black"))+ theme(legend.position = c(0.2, .9))
+dev.off()
+
+p
+
+
+```
+
+
+```{r}
+#access
+#No
+#0.07099455
+#SD 0.07005064
+
+Yes
+#0.02011071
+#SD 0.01987114
+
+#hour
+newdata <- expand.grid(Hour_group = c("Morning","Mid-day", "Afternoon"),
+Season = c("Non-Denning", "Denning"))
+fit <- data.frame(x = predict(h, newdata = newdata, se.fit = F, type = "response"))
+hour <- data.frame(newdata, Pace = fit$x)
+hour1 <- hour %>% group_by(Hour_group) %>% summarise(mn = mean(Pace, na.rm = T), se = sd(Pace, na.rm = T)/sqrt(n()))
+#Morning
+#0.007985841
+#SD 0.007963842
+
+#Mid-day
+#0.036026905
+#SD 0.035921691
+
+#Afternoon
+#0.120256203
+#SD 0.119827576
+```
+
+#######################
+#######################
+## Luna Forage Model ##
+#######################
+#######################
+
+```{r}
+##set working directory
+setwd("~/Black Bears")
+
+#remove previous data
+rm(list = ls())
+##run libraries again
+library(AER)
+library(arm)
+library(Sleuth3)
+library(lmerTest)
+library(tidyverse)
+library(GGally) #check assumptions
+library(ggplot2) #graphing
+library(AICcmodavg) #AIC tables
+library(usdm) #for VIF calculations on dataframe
+library(lme4) #for assumption tests in mixed effects model
+library(gridExtra) #grid for plots
+library(sjPlot) #visualizing mixed-effects models
+library(sjstats) #ICC - intraclass-correlation coefficent
+require(jtools) ##plots and saving plots
+library(viridis) #color scheme
+theme_set(theme_classic(12))
+
+#load data
+load(file = "Luna_forage.RData")
+
+##remove october data
+luna_forage <- luna_forage[!(luna_forage$Month == "10"),]
+
+
+```
+
+#Data exploration
+
+```{r}
+
+#check distribution of hours (needs grouping)
+xtabs(~Foraging + Hour, data = luna_forage)
+luna_forage$Hour_group <- ifelse(luna_forage$Hour %in% c(9, 10, 11), "Morning",
+                                 ifelse(luna_forage$Hour %in% c(12, 13), "Mid-day",
+                                        ifelse(luna_forage$Hour %in% c(14, 15, 16), "Afternoon", "")))
+xtabs(~Foraging + Hour_group, data = luna_forage)
+
+##as factor
+luna_forage$Hour_group <- as.factor(luna_forage$Hour_group)
+
+##now access (fine)
+xtabs(~Foraging + Access, data = luna_forage)
+
+##explore the data
+head(luna_forage)
+str(luna_forage)
+
+#USE A BOXPLOT/TABLE/FIND DESCRIPTIVE STATS to EXPLORE FACTORS
+apply(table(luna_forage[, c("Foraging", "Access")]), 1, prop.table)
+apply(table(luna_forage[, c("Foraging", "Season")]), 1, prop.table)
+apply(table(luna_forage[, c("Foraging", "Hour_group")]), 1, prop.table)
+
+##plot of data
+##access seems to have an effect on foraging
+ggplot(luna_forage, aes(x = Access, y = Foraging)) +
+  stat_summary(fun.data = mean_cl_boot,size = 0.5)+
+  ylim(c(0,1))
+
+##some effect of time of day on foraging
+ggplot(luna_forage, aes(x = Hour_group, y = Foraging)) +
+  stat_summary(fun.data = mean_cl_boot,size = 0.5)+
+  ylim(c(0,1))
+
+#FORAGE SHOULD BE A FACTOR NOW
+luna_forage$Foraging <- factor(luna_forage$Foraging)
+
+```
+
+##################
+##Start modeling##
+##################
+
+```{r}
+
+#Models
+
+modlist <- list()
+
+
+modlist[["null"]] <- null <- glmer(Foraging ~ 1 + (1|Season), data = luna_forage, family = "binomial")
+
+modlist[["full"]] <- full <- glmer(Foraging ~ Access + Hour_group + (1|Season), data = luna_forage, family = "binomial")
+
+modlist[["access"]] <- a <- glmer(Foraging ~ Access + (1|Season), data = luna_forage, family = "binomial")
+
+modlist[["hour"]] <- h <- glmer(Foraging ~ Hour_group + (1|Season), data = luna_forage, family = "binomial")
+
+#compare AICs
+aictab(modlist)
+#access model best by >2 compared to full
+
+```
+
+#Final Model
+
+```{r}
+
+##summarize model, access best model
+summary(a)
+tab_model(a)
+##Marginal R^2 - 0.014 and Conditional R^2 - 0.074
+
+```
+
+####################
+##Test Assumptions##
+####################
+
+```{r}
+
+#pull coefficients
+co_lunaforage <- fixef(a)
+co_lunaforage
+
+###over fitting
+isSingular(a)
+#False, no overfitting
+
+```
+
+###################
+##Plot the Model ##
+###################
+
+```{r}
+
+##model with response = pace, predictors = access and hour groups and season as random variable
+plot_model(a, type = "pred", terms = c("Access"))
+
+##basic effects plot
+require(effects)
+plot (allEffects(a))
+
+###prepare plot
+pred_data <- expand.grid(Access = c("No","Yes"),
+                         Season = c("Non-Denning", "Denning"))
+fit <- data.frame(x = predict(a, newdata = pred_data, se.fit = F, type = "response"))
+pdat1 <- data.frame(pred_data, Foraging = fit$x)
+pdata <- pdat1 %>% group_by(Access) %>% summarise(mn = mean(Foraging, na.rm = T), se = sd(Foraging, na.rm = T)/sqrt(n()))
+
+#plot
+
+pdata <- mutate(pdata, labs = c("Limited Access", "Full Access"))
+
+jpeg(file="luna_forage_fin.jpeg")
+p <- ggplot(pdata, aes(x = labs, y = mn)) + 
+  geom_line(size = 2) +                 
+  geom_col(data = pdata, aes(x = labs, y = mn, group = NULL),
+           size = 1, position = position_dodge(width = 0.8), fill = c("lightsteelblue", "firebrick")) + 
+  geom_errorbar(data = pdata, aes(x = labs, y = mn, ymax = mn + se, 
+                                    ymin = mn - se, group = NULL), width = 0.2, position = position_dodge(width = 0.8)) +
+  labs(y = "Predicted likelihood of foraging", x = "Access Type") +
+  theme_bw(base_size = 30) +
+  theme(text = element_text(size=15))
+p + theme(legend.background = element_rect(size=0.5, linetype="solid", 
+                                           colour ="black"))+ theme(legend.position = c(0.2, .9))
+dev.off()
+
+pdata
+p
+
+```
+
+#######################
+#######################
+## Nova Forage Model ##
+#######################
+#######################
+
+```{r}
+
+##set working directory
+setwd("~/Black Bears")
+
+#remove previous data
+rm(list = ls())
+##run libraries again
+library(AER)
+library(arm)
+library(Sleuth3)
+library(lmerTest)
+library(tidyverse)
+library(GGally) #check assumptions
+library(ggplot2) #graphing
+library(AICcmodavg) #AIC tables
+library(usdm) #for VIF calculations on dataframe
+library(lme4) #for assumption tests in mixed effects model
+library(gridExtra) #grid for plots
+library(sjPlot) #visualizing mixed-effects models
+library(sjstats) #ICC - intraclass-correlation coefficent
+require(jtools) ##plots and saving plots
+library(viridis) #color scheme
+theme_set(theme_classic(12))
+
+##load data
+load(file = "Nova_forage.RData")
+
+##remove october data
+nova_forage <- nova_forage[!(nova_forage$Month == "10"),]
+
+
+```
+
+#data exploration
+
+```{r}
+##check distribution of hours (needs grouping)
+xtabs(~Foraging + Hour, data = nova_forage)
+
+
+nova_forage$Hour_group <- ifelse(nova_forage$Hour %in% c(9, 10, 11), "Morning",
+                                 ifelse(nova_forage$Hour %in% c(12, 13), "Mid-day",
+                                        ifelse(nova_forage$Hour %in% c(14, 15, 16), "Afternoon", "")))
+xtabs(~Foraging + Hour_group, data = nova_forage)
+
+##as factor
+nova_forage$Hour_group <- as.factor(nova_forage$Hour_group)
+
+##now access (fine)
+xtabs(~Foraging + Access, data = nova_forage)
+
+##explore the data
+head(nova_forage)
+str(nova_forage)
+
+#USE A BOXPLOT/TABLE/FIND DESCRIPTIVE STATS to EXPLORE FACTORS
+apply(table(nova_forage[, c("Foraging", "Access")]), 1, prop.table)
+apply(table(nova_forage[, c("Foraging", "Season")]), 1, prop.table)
+apply(table(nova_forage[, c("Foraging", "Hour_group")]), 1, prop.table)
+
+##plot of data
+##hard to see an effect of access on foraging here
+ggplot(nova_forage, aes(x = Access, y = Foraging)) +
+  stat_summary(fun.data = mean_cl_boot,size = 0.5)+
+  ylim(c(0,1))
+
+##no clear relationship between time of day and foraging
+ggplot(nova_forage, aes(x = Hour_group, y = Foraging)) +
+  stat_summary(fun.data = mean_cl_boot,size = 0.5)+
+  ylim(c(0,1))
+
+#Forage SHOULD BE A FACTOR NOW
+nova_forage$Foraging <- factor(nova_forage$Foraging)
+
+```
+
+##################
+##Start modeling##
+##################
+
+```{r}
+
+#Models
+
+modlist <- list()
+
+modlist[["null"]] <- null <- glmer(Foraging ~ 1 + (1|Season), data = nova_forage, family = "binomial")
+
+modlist[["full"]] <- full <- glmer(Foraging ~ Access + Hour_group + (1|Season), data = nova_forage, family = "binomial")
+
+modlist[["access"]] <- a <- glmer(Foraging ~ Access + (1|Season), data = nova_forage, family = "binomial")
+
+modlist[["hour"]] <- h <- glmer(Foraging ~ Hour_group + (1|Season), data = nova_forage, family = "binomial")
+
+#compare AICs
+aictab(modlist)
+#full model is best
+
+```
+
+#Final model
+
+```{r}
+
+##interaction model best
+summary(full)
+tab_model(full)
+##Marginal R^2 - 0.016 and Conditional R^2 - 0.099
+
+```
+
+####################
+##Test Assumptions##
+####################
+
+```{r}
+
+#pull coefficients
+co_novaforage <- fixef(full)
+co_novaforage
+
+###over fitting
+isSingular(full)
+#False, no overfitting
+
+```
+
+###################
+##Plot the Model ##
+###################
+
+```{r}
+
+plot_model(full, type = "pred", terms = c("Access", "Hour_group"))
+
+##basic effects plot
+require(effects)
+plot (allEffects(full))
+
+###prepare plot
+newdata <- expand.grid(Access = c("No","Yes"),
+Season = c("Non-Denning", "Denning"))
+fit <- data.frame(x = predict(a, newdata = newdata, se.fit = F, type = "response"))
+access <- data.frame(newdata, Foraging = fit$x)
+access1 <- access %>% group_by(Access) %>% summarise(mn = mean(Foraging, na.rm = T), se = sd(Foraging, na.rm = T)/sqrt(n()))
+
+#plot
+pdatfull <- mutate(access1, labs = c("Limited Access", "Full Access"))
+
+jpeg(file="nova_forage_fin.jpeg")
+p <- ggplot(pdatfull, aes(x = labs, y = mn)) + 
+  geom_line(size = 2) +                 
+  geom_col(data = pdatfull, aes(x = labs, y = mn, group = NULL),
+           size = 1, position = position_dodge(width = 0.8), fill = c("lightsteelblue", "firebrick")) + 
+  geom_errorbar(data = pdatfull, aes(x = labs, y = mn, ymax = mn + se, 
+                                    ymin = mn - se, group = NULL), width = 0.2, position = position_dodge(width = 0.8)) +
+  labs(y = "Predicted likelihood of foraging", x = "Access Type") +
+  theme_bw(base_size = 30) +
+  theme(text = element_text(size=15))
+p + theme(legend.background = element_rect(size=0.5, linetype="solid", 
+                                           colour ="black"))+ theme(legend.position = c(0.2, .9))
+dev.off()
+
+pdatfull
+p
+
+```
+
+```{r}
+#access
+#No
+#0.1046419
+#SD 0.04683933
+
+#Yes
+#0.1337054
+#SD 0.05823779
+
+#hour
+newdata <- expand.grid(Hour_group = c("Morning","Mid-day", "Afternoon"),
+Season = c("Non-Denning", "Denning"))
+fit <- data.frame(x = predict(h, newdata = newdata, se.fit = F, type = "response"))
+hour <- data.frame(newdata, Foraging = fit$x)
+hour1 <- hour %>% group_by(Hour_group) %>% summarise(mn = mean(Foraging, na.rm = T), se = sd(Foraging, na.rm = T)/sqrt(n()))
+
+#Morning
+#0.09721349
+#SD 0.03758125
+
+#Mid-day
+#0.12697528
+#SD 0.04767453
+
+#Afternoon
+#0.14787407
+#SD 0.05434816
+
+```
+
